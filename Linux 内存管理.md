@@ -156,15 +156,15 @@ Linux 中页的回收主要通过两种方式触发：
 
 ### 哪些页框可以回收
 
-+ 属于内核的大部分页框不能被回收，比如内核栈、内核代码段、内核数据段和大部分内存使用的页框
++ 属于内核的大部分页框不能被回收，比如内核栈、内核代码段、内核数据段和大部分内存使用的页框，因为我们要保证系统的正常运行。
 
-+ 进程使用的页框是可以回收的，比如进程代码段、进程数据段、进程堆栈、进程访问文件时映射的文件页、进程间共享使用的页
++ 进程使用的页框是可以回收的，比如进程代码段、进程数据段、进程堆栈、进程访问文件时映射的文件页、进程间共享使用的页。因为这些进程使用的页是通过 `page fault` 分配的。
 
 ### 回收页的操作和分类
 
 Linux 进程的页分为如下几种：
 
-+ **文件页 (File-backed Pages)** ： 有文件背景的页面，如代码段，可以直接和硬盘对应的文件交换
++ **文件页 (File-backed Pages)** ： 有文件背景的页面，如代码段，可以直接和某个文件直接对应
 
 + **匿名页 (Anonymous Pages)** ： 如进程堆、栈、数据段使用的页、匿名 mmap 共享内存使用的页、shmem 共享内存使用的页，如果交换的话，需要交换到虚拟内存 (swapfile) 或者 Linux 的 `swap` 分区
 
@@ -176,6 +176,81 @@ Linux 进程的页分为如下几种：
 
 + 将页回写保存到磁盘里（磁盘区或 `swap` 分区），然后再释放
 
+### LRU 链表回收流程
+
+LRU 链表中的页包括：可以存放到 `swap` 分区的匿名区、映射了文件的文件页、以及被锁的禁止换出的内存页。可以来说，除了内核使用的页框，都会被加入到 LRU 链表中。
+
+而每一个 ZONE 都有一套 LRU 链表，他们包括：
+
++ `LRU_INACTIVE_ANON` ： 非活动匿名页 LRU 链表（`swap`）
+
++ `LRU_ACTIVE_ANON` ： 活动匿名页 LRU 链表（`swap`）
+
++ `LRU_INACTIVE_FILE` ： 非活动文件页 LRU 链表（磁盘）
+
++ `LRU_ACTIVE_FILE` ： 活动文件页 LRU 链表（磁盘）
+
++ `LRU_UNEVICTABLE` ： 所有禁止换出的页的描述符
+
+加入到 `ACTIVE` 链表上的页其 `page->flags` 上都要设置 `PG_active` 标志。凡是设置了 `PG_unevictable` 标志的都要挂载 `LRU_UNEVICTABLE` 链表上。没有设置 `PG_active / PG_unevictable` 标志的都处于 `INACTIVE` 状态。处于相关状态的页面通过 `page->lru` 链接到对应的链表上。
+
+当某个页被访问后，提高该页面的活跃度。提高活跃度的方法是：或者对 `page->flags` 设置 `PG_referenced` 标志，或者对 `page->flags` 设置 `PG_active` （同时该物理页面从 `INACTIVE` 链表上转移到 `ACTIVE` 链表上). 有 `PG_referenced` 和 `PG_active` 标志，可以得到页面的状态，该活跃度由低到高依次为：`00 -> 01 -> 10 -> 11`
+
+![img](http://3.bp.blogspot.com/-CF6t45amFb0/UTcVFwSa7SI/AAAAAAAAB18/81JGETxBHcs/s320/image002-775214.png)
+
+我们来细数一下图中的转移：
+
++ **1)** 当 `INACTIVE` 链表上的页数不够的时候，会调用 `shrink_active_list`，该函数会将 `ACTIVE` 链表上的页移动到 `INACTIVE` 链表上。对应于上图标号为 1 的转移
+
++ **2)** `make_page_accessed()` 当通过 `read()` 系统调用或者读已经在 cache 中的页面时，会提高页面的活跃度。对应标号 2 的转移
+
+`shrink_page_list->page_check_references()` 用来在腾出链表空间时，进行状态转移
+
++ **3-a)** 如果是匿名页，并且最近被访问过，对应 3-a 的转移。即 `INACTIVE + PG_referenced` -> `ACTIVE`，`inactive` -> `active`。 ( `01` -> `10` 或者 `00` -> `10` )
+
++ **3-b)** 如果是已经映射的文件页，最近被访问过，如果 `PG_referenced` 置位或者被两个进程最近访问过，对应于 3-b 的转移（`01` -> `11`）。
+
++ **3-c)** 如果是已经映射的文件页，最近被访问过, 并且该 page cache 中的内容是可执行的（例如，用户进程的代码段），则 `INACTIVE` -> `ACTIVE + PG_referenced`。（`00` -> `11`，`01` -> `11`）
+
++ **3-d)** 如果是已经映射的文件页，最近被访问过, 则设置 `PG_referenced` 标志，仍旧保留 `INACTIVE` 状态，不进行回收。（ `00` -> `01`，`01` -> `01` ）
+
++ **3-e)** 除了以上情况，均进行回收。即：最近没有被访问过的匿名页和文件页。
+
+`shrink_page_list->page_check_references()` 的返回值有下列几个
+
++ `PAGEREF_RECLAIM` 进行回收
+
++ `PAGEREF_RECLAIM_CLEAN` 若该页是干净的(clean)，则进行回收
+
++ `PAGEREF_KEEP` 仍然保持在 `INACTIVE` 链上，不进行回收
+
++ `PAGEREF_ACTIVATE` 不进行回收，并将该页转移到 `ACTIVE` 链上
+
+![img](http://www.wowotech.net/content/uploadfile/201511/10fb1447331995.png)
+
+![img](https://upload-images.jianshu.io/upload_images/2828107-ccacf8853af203c6.jpeg?imageMogr2/auto-orient/strip|imageView2/2/w/553/format/webp)
+
+### 一个可回收页面的生命周期
+
++ 文件页
+
+    `Free -> INACTIVE -> [ACTIVE] <-> INACTIVE -> Reclaimable -> Free`
+
+    在 Buddy System 中未被分配时，属于 `Free` 状态。当被分配时，首先被挂在 `INACTIVE` 链上。若被进程访问，就会变成 `ACTIVE`。当一段时间没有被访问时，又会被转成 `INACTIVE`，并在 `INACTIVE` 链上等待被回收。若被回收就会回到 Buddy System 变为 `Free`。
+
++ 匿名页
+
+    `Free -> ACTIVE <-> [INACTIVE] -> Reclaimable -> Free`
+
+    匿名页通过 `page fault` 被分配以后，在 `ACTIVE` 链表上，经过 deactive 变为 `INACTIVE`，最后被回收到 Buddy System 中。
+
+对于匿名页和文件页，刚被分配后所设置的状态，可以得出：系统总是想尽快老化文件页面。在系统的眼中，文件页的换出成本要低于匿名页。
+
+### Swappiness
+
+Linux 内存回收可以回收文件页和匿名页。而 Swappiness 越大，越倾向于回收匿名页，积极地把内存中的数据搬运到 `swap` 分区中；反之，更倾向于回收文件页。
+
 ### 参考资料
 
 https://www.jianshu.com/p/7ab51b8a6368
+http://abcdxyzk.github.io/blog/2015/04/18/kernel-mm-reclaim2/
