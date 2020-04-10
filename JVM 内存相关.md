@@ -40,6 +40,16 @@ https://juejin.im/post/5d6dd2915188252d43758ddb
 
 ---
 
+### Java 运行内存设置参数
+
++ `-Xmx` Java Heap 最大值，默认为物理内存的 1/4
+
++ `-Xms` Java Heap 最小值
+
++ `-Xmn` Java Heap Young区大小
+
+---
+
 ### JVM 的内存会被正常 swap 吗
 
 在 Linux 中，JVM 对其而言只是一个正常的进程，因此物理内存不够时，Linux 也会正常把其占用的内存 swap 掉，而不是出发 JVM 的 GC 机制。
@@ -105,26 +115,8 @@ Linux 的内存分为两种类型：Page Cache 和 应用程序内存。应用�
 
 ### JVM 的 GC 会回收哪些内存，包括 Page Cache 吗
 
-从上面的分析来看，应该是不会的。但是我们还是进行一系列实验，并探究如何对内存进行一系列监控。
+从上面的分析来看，应该是不会的。
 
 ### 参考资料
 
 https://www.debugger.wiki/article/html/1562946445000314
-
----
-
-### Java 运行内存设置参数
-
-+ `-Xmx` Java Heap 最大值，默认为物理内存的 1/4
-
-+ `-Xms` Java Heap 最小值
-
-+ `-Xmn` Java Heap Young区大小
-
----
-
-### 评价 JVM 内存的指标
-
-+ 活跃数据的大小
-
-根据 JVM 的垃圾回收机制，最活跃的对象会在若干次 `Minor GC` 之后被移动到老年代，因此我们可以

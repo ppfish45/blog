@@ -52,6 +52,12 @@ echo "memory.available_in_kb $memory_available_in_kb"
 echo "memory.available_in_mb $memory_available_in_mb"
 ```
 
++ `/proc/meminfo` 中的 `MemTotal` 为可供 Kernel 支配的内存，在系统运行期间一般不会变动，可以认为是总内存
+
++ `/sys/fs/cgroup/memory/memory.usage_in_bytes` 一个当前内存使用量的估计值（包含 cache 和 buffer）
+
++ `/sys/fs/cgroup/memory/memory.stat` 中的 `total_inactive_file` 指 `INACTIVE` 文件页 LRU 链表上的内存数量，以字节为单位
+
 注意 kubelet 在计算 `memory.available` 时将 `inactive_file` 排除在外了，指的是在 Inactive LRU 链表上的文件页大小，在系统内存紧张时会被回收。
 
 #### 驱逐阈值
@@ -63,7 +69,6 @@ echo "memory.available_in_mb $memory_available_in_mb"
 + `memory.available<1Gi`
 
 阈值分为 **软驱逐阈值** 和 **硬驱逐阈值** 两种。
-
 
 一个软驱逐阈值由 **宽限期** 和 **驱逐阈值** 组成，在宽限期内（比如内存占用 `> 85%` 持续不足 `10` 秒），kubelet 不会采取回收任何 **与驱逐信号相关** 的资源。
 
@@ -103,7 +108,7 @@ kubelet 会将一个或者多个驱逐信号对应到相应的节点状态，状
 
 + 如果 kubelet 驱逐 pod 到资源使用率低于阈值就停止，则有可能很快资源使用率又返回到阈值，从而又触发驱逐，如此循环往复。那么我们可以用 `--eviction-minimum-reclaim` 来配置至少要清理多少资源才会停止
 
-+ 一个 pod 被驱逐后，k8s 会生成一个新的 pod 来替代他，并分配到一个节点继续运行。而这个分配逻辑是沿用之前的逻辑，因此它很有可能重新被分配到同一个节点，然后又可能触发驱逐，如此往复。要解决这个问题，通过设置 `--eviction-pressure-transition-period` 这个参数，限制了 kubelet 需要进入 **雅礼状态** 一段时间才可以向 api-server 报告本节点的情况，从而防止 pod 在短时间内又被分配到同一个节点。在这段压力状态中，必须确保没有资源使用超过阈值。
++ 一个 pod 被驱逐后，k8s 会生成一个新的 pod 来替代他，并分配到一个节点继续运行。而这个分配逻辑是沿用之前的逻辑，因此它很有可能重新被分配到同一个节点，然后又可能触发驱逐，如此往复。要解决这个问题，通过设置 `--eviction-pressure-transition-period` 这个参数，限制了 kubelet 需要进入 **压力状态** 一段时间才可以向 api-server 报告本节点的情况，从而防止 pod 在短时间内又被分配到同一个节点。在这段压力状态中，必须确保没有资源使用超过阈值。
 
 #### 回收磁盘资源
 
@@ -120,15 +125,19 @@ kubelet 会将一个或者多个驱逐信号对应到相应的节点状态，状
 
 #### 节点 OOM 行为
 
-正常情况下，节点的资源紧张时，都是通过驱逐行为来释放资源。但有可能在达到阈值之前，就触发了系统的 OOM 行为，即 Linux Kernel 的 `oom_killer`。
+正常情况下，节点的资源紧张时，都是通过驱逐行为来释放资源。但有可能在达到阈值之前，就触发了系统的 OOM 行为，即 Linux Kernel 的 `oom_killer`。kill 的顺序是根据 QoS 即设定的 `OOM_ADJ` 分数来决定的。
+
+### 参考资料
+
+https://www.kernel.org/doc/Documentation/cgroup-v1/memory.txt (cgroup 中 memory 相关)
+
+https://hustcat.github.io/memory-usage-in-process-and-cgroup/
+
+https://www.cnblogs.com/xuxinkun/p/5541894.html (cgroup 中的 memory 关系计算)
+
+https://kubernetes.io/zh/docs/tasks/administer-cluster/out-of-resource/
 
 ---
-
-### OOM 相关
-
-
-
-### 获取每个业务的 cgroups
 
 ### 参考资料
 
