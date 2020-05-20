@@ -1,6 +1,3 @@
-
-
-
 ### 研究流程
 
 #### 问题
@@ -24,13 +21,30 @@
 For the kernels I'm studying (3.2 and 3.13), here are the four kernel functions I'm profiling to measure cache activity:
 
 + mark_page_accessed() for measuring cache accesses
+
 + mark_buffer_dirty() for measuring cache writes
+
 + add_to_page_cache_lru() for measuring page additions
+
 + account_page_dirtied() for measuring page dirties
 
 mark_page_accessed() shows total cache accesses, and add_to_page_cache_lru() shows cache insertions (so does add_to_page_cache_locked(), which even includes a tracepoint, but doesn't fire on later kernels). I thought for a second that these two were sufficient: assuming insertions are misses, I have misses and total accesses, and can calculate hits.
 
 The problem is that accesses and insertions also happens for writes, dirtying cache data. So the other two kernel functions help tease this apart (remember, I only have function call rates to work with here). mark_buffer_dirty() is used to see which of the accesses were for writes, and account_page_dirtied() to see which of the insertions were for writes.
+
+因此只需要有类似的四个指标，就可以算出 hit ratio，分别是 page_accessed，mark_buffer_dirty，page_added，page_dirtied。
+
+其中 page cache 的访问总数是 page_access - mark_buffer_dirty，而 miss 的总数是 page_added - page_dirtied。减去的后一项是因为 double counting。
+
+#### 对于一个门限值，如何判断他的好坏
+
++ 回收后没有出现内存颠簸等异常情况（可用性 ok）
+
++ 回收后一段时间内的平均 hit ratio 相较于前一段时间的平均 hit ratio 没有明显降低的情况（性能保持 ok）
+
+#### 一个延伸的想法 —— 启发式回收
+
+不断提高回收的门限，直到出现明显副作用才停止，”试探性回收“
 
 #### 一些不那么直接的想法
 
